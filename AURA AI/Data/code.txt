@@ -1,0 +1,28 @@
+Since you asked for code, I'll provide a simple example of a Python program that calculates the area and perimeter of a rectangle.
+
+```python
+# Define a class for Rectangle
+class Rectangle:
+    def __init__(self, length, width):
+        self.length = length
+        self.width = width
+
+    # Method to calculate area
+    def calculate_area(self):
+        return self.length * self.width
+
+    # Method to calculate perimeter
+    def calculate_perimeter(self):
+        return 2 * (self.length + self.width)
+
+# Create an instance of Rectangle
+rectangle = Rectangle(10, 5)
+
+# Calculate and print area and perimeter
+print("Area: ", rectangle.calculate_area())
+print("Perimeter: ", rectangle.calculate_perimeter())
+```
+
+This code defines a `Rectangle` class with methods to calculate its area and perimeter, given its length and width. You can modify the length and width values when creating an instance of the `Rectangle` class to calculate the area and perimeter for different rectangles.
+
+If you have a specific coding task or problem in mind, feel free to describe it, and I can assist you with writing the code.
