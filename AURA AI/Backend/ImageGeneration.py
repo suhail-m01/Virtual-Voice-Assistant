@@ -1,123 +1,78 @@
+"""Existing Stability image capability without import-time network loops."""
+from __future__ import annotations
+
 import asyncio
-from random import randint
-from PIL import Image
-import requests
-from dotenv import get_key, load_dotenv # Use load_dotenv to load the .env file
+import base64
 import os
+from pathlib import Path
+from random import randint
 from time import sleep
-import base64 # Needed for Stability AI
-import json # Needed to handle potential errors
+from typing import Optional
 
-# --- Load environment variables from .env file ---
-load_dotenv()
 
-# --- Functions for opening images (No Change) ---
-def open_images(prompt):
-    folder_path = r"Data"
-    prompt = prompt.replace(" ", "_")
-    # We will save as PNG for Stability AI
-    Files = [f"{prompt}{i}.png" for i in range(1, 2)]
+def _settings():
+    from .config import load_settings
+    return load_settings()
 
-    for file in Files:
-        image_path = os.path.join(folder_path, file)
-        try:
-            img = Image.open(image_path)
-            print(f"Opening image: {image_path}")
-            img.show()
-            sleep(1)
-        except IOError:
-            print(f"Unable to open {image_path}. The file might not have been generated due to an error.")
 
-# --- NEW FUNCTIONS FOR STABILITY AI ---
-
-# Stability AI API configuration
-STABILITY_API_URL = "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image"
-STABILITY_API_KEY = get_key('.env', 'StabilityAI_APIKey')
-
-# Check if the Stability AI API key exists
-if not STABILITY_API_KEY:
-    raise ValueError("StabilityAI_APIKey not found in .env file. Please add it.")
-
-# Headers for the Stability AI API
-stability_headers = {
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {STABILITY_API_KEY}",
-}
-
-async def generate_single_image_stability(prompt: str, image_number: int):
-    """Generates a single image using the Stability AI API and saves it."""
-    
-    # Payload for the Stability AI API
-    payload = {
-        "text_prompts": [{"text": f"{prompt}, 4k, high-resolution, photorealistic"}],
-        "cfg_scale": 7,
-        "height": 1024,
-        "width": 1024,
-        "samples": 1,
-        "steps": 30,
-        "seed": randint(0, 4294967295) # Stability uses a larger seed range
-    }
-
-    print(f"Requesting image {image_number} from Stability AI...")
-    
-    # Asynchronous request
-    response = await asyncio.to_thread(
-        requests.post,
-        STABILITY_API_URL,
-        headers=stability_headers,
-        json=payload
-    )
-
-    if response.status_code != 200:
-        print(f"Error for image {image_number}: {response.status_code} - {response.text}")
+def open_images(prompt: str) -> None:
+    from PIL import Image
+    settings = _settings()
+    safe = prompt.replace(" ", "_")
+    path = settings.data_dir / f"{safe}1.png"
+    try:
+        Image.open(path).show()
+    except OSError:
         return
 
-    response_data = response.json()
 
-    # Save the received image
-    for i, image in enumerate(response_data.get("artifacts", [])):
-        file_path = fr"Data\{prompt.replace(' ', '_')}{image_number}.png" # Save as PNG
-        print(f"Saving image to {file_path}")
-        with open(file_path, "wb") as f:
-            f.write(base64.b64decode(image["base64"]))
+async def generate_single_image_stability(prompt: str, image_number: int, *, api_key: Optional[str] = None) -> Optional[Path]:
+    settings = _settings()
+    key = api_key or settings.stability_api_key
+    if not key:
+        raise RuntimeError("Image generation provider is not configured")
+    try:
+        import requests
+    except ImportError as exc:
+        raise RuntimeError("requests is required for image generation") from exc
+    payload = {"text_prompts": [{"text": f"{prompt}, 4k, high-resolution, photorealistic"}], "cfg_scale": 7, "height": 1024, "width": 1024, "samples": 1, "steps": 30, "seed": randint(0, 4294967295)}
+    response = await asyncio.to_thread(requests.post, "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image", headers={"Accept": "application/json", "Content-Type": "application/json", "Authorization": f"Bearer {key}"}, json=payload, timeout=90)
+    if response.status_code != 200:
+        raise RuntimeError("Image provider request failed")
+    artifacts = response.json().get("artifacts", [])
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    output: Optional[Path] = None
+    for artifact in artifacts:
+        output = settings.data_dir / f"{prompt.replace(' ', '_')}{image_number}.png"
+        output.write_bytes(base64.b64decode(artifact["base64"]))
+    return output
 
-async def generate_images_stability(prompt: str):
-    """Creates and runs tasks to generate 4 images concurrently."""
-    tasks = []
-    for i in range(1, 2): # Generate images 1, 2, 3, 4
-        task = asyncio.create_task(generate_single_image_stability(prompt, i))
-        tasks.append(task)
-    
-    await asyncio.gather(*tasks)
+
+async def generate_images_stability(prompt: str) -> list[Path]:
+    result = await generate_single_image_stability(prompt, 1)
+    return [result] if result else []
+
 
 def GenerateImages(prompt: str):
-    # This function now calls the new Stability AI functions
-    asyncio.run(generate_images_stability(prompt))
+    paths = asyncio.run(generate_images_stability(prompt))
     open_images(prompt)
+    return paths
 
-# --- Main execution loop (No Change) ---
-while True:
+
+def legacy_worker() -> None:
+    """Compatibility worker for the old ImageGeneration.data protocol."""
+    settings = _settings()
+    marker = settings.project_dir / "Frontend" / "Files" / "ImageGeneration.data"
     try:
-        with open(r"Frontend\Files\ImageGeneration.data", "r") as f:
-            Data: str = f.read()
+        prompt, status = marker.read_text(encoding="utf-8").split(",", 1)
+    except (OSError, ValueError):
+        return
+    if status.strip().lower() == "true":
+        try:
+            GenerateImages(prompt)
+        finally:
+            marker.write_text("False, False", encoding="utf-8")
 
-        Prompt, Status = Data.split(",")
 
-        if Status == "True":
-            print("Generating Images using Stability AI...")
-            GenerateImages(prompt=Prompt)
-
-            with open(r"Frontend\Files\ImageGeneration.data", "w") as f:
-                f.write("False, False")
-            break
-        else:
-            sleep(1)
-    except FileNotFoundError:
-        print("Waiting for ImageGeneration.data file...")
-        sleep(1)
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        with open(r"Frontend\Files\ImageGeneration.data", "w") as f:
-            f.write("False, False")
-        break
+if __name__ == "__main__":
+    legacy_worker()
