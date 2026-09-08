@@ -1,6 +1,65 @@
 # AURA 2026
 
-AURA is a secure, agentic, voice-first computer assistant upgraded from the original 2024 PyQt5 application. The existing speech, TTS, search, image, content, media and application capability modules remain available as adapters; the new agent decides **what** to do, while deterministic tools and a security gateway decide **whether and how** it may happen.
+# 🎙️ Aura — Intelligent Virtual Voice Assistant
+
+Aura is a Python-based intelligent voice assistant designed to combine
+natural voice interaction, AI reasoning, automation, and external APIs
+into a unified assistant.
+
+## ✨ Features
+
+- 🎤 Voice command recognition
+- 💬 Natural-language interaction
+- 🧠 LLM-powered responses
+- 🌐 Real-time API integration
+- ⚙️ Task automation
+- 🖥️ Interactive user interface
+- 🔊 Text-to-speech responses
+- 🔌 Modular architecture for adding new capabilities
+
+## 🏗️ Architecture
+
+User Voice
+    ↓
+Speech Recognition
+    ↓
+Intent Understanding
+    ↓
+AI / LLM Engine
+    ↓
+Tool & API Router
+    ↓
+External Services / Automation
+    ↓
+Response Generation
+    ↓
+Text-to-Speech
+    ↓
+User
+
+## 🛠️ Tech Stack
+
+Python
+Speech Recognition
+Text-to-Speech
+LLM APIs
+REST APIs
+GUI Framework
+JSON
+
+## 🚀 Getting Started
+
+### Clone
+
+git clone <repository>
+
+### Install dependencies
+
+pip install -r requirements.txt
+
+### Run
+
+python main.py
 
 ## Run
 
