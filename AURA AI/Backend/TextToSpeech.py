@@ -1,83 +1,60 @@
-import pygame
-import random
+"""Non-blocking-friendly TTS adapter retaining the existing Edge TTS voice."""
+from __future__ import annotations
+
 import asyncio
-import edge_tts
-import os
-from dotenv import dotenv_values
+from pathlib import Path
+import random
+from typing import Callable
 
-env_vars = dotenv_values(".env")
-AssistantVoice = env_vars.get("AssistantVoice")
+from .config import load_settings
 
-async def TextToAudioFile(text) -> None:
-    file_path = r"Data\speech.mp3"
 
-    if os.path.exists(file_path):
-        os.remove(file_path)
+async def TextToAudioFile(text: str) -> None:
+    settings = load_settings()
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise RuntimeError("edge-tts is not installed") from exc
+    output = settings.data_dir / "speech.mp3"
+    communicate = edge_tts.Communicate(text, settings.assistant_voice, pitch="+5Hz", rate="+13%")
+    await communicate.save(str(output))
 
-    communicate = edge_tts.Communicate(text, AssistantVoice, pitch='+5Hz', rate='+13%')
-    await communicate.save(r"Data\speech.mp3")
 
-def TTS(Text, func=lambda r=None: True):
-    while True:
+def TTS(text: str, func: Callable = lambda *_: True):
+    try:
+        asyncio.run(TextToAudioFile(text))
         try:
-            asyncio.run(TextToAudioFile(Text))
-
+            import pygame
             pygame.mixer.init()
-
-            pygame.mixer.music.load(r"Data\speech.mp3")
+            pygame.mixer.music.load(str(load_settings().data_dir / "speech.mp3"))
             pygame.mixer.music.play()
-
             clock = pygame.time.Clock()
-
             while pygame.mixer.music.get_busy():
                 if not func():
                     break
                 clock.tick(10)
-
             return True
-        except Exception as e:
-            print(f"Error in TTS : {e}")
-
         finally:
             try:
                 func(False)
+            except Exception:
+                pass
+            try:
                 pygame.mixer.music.stop()
                 pygame.mixer.quit()
-            except Exception as e:
-                print(f"Error in finally block: {e}")
+            except Exception:
+                pass
+    except Exception:
+        return False
 
-def TextToSpeech(Text, func=lambda r=None: True):
-    Data = str(Text).split(".")
 
-    responses = [
-        "The rest of the result has been printed to the chat screen, kindly check it out sir.",
-        "The rest of the text is now on the chat screen, sir, please check it.",
-        "You can see the rest of the text on the chat screen, sir.",
-        "The remaining part of the text is now on the chat screen, sir.",
-        "Sir, you'll find more text on the chat screen for you to see.",
-        "The rest of the answer is now on the chat screen, sir.",
-        "Sir, please look at the chat screen, the rest of the answer is there.",
-        "You'll find the complete answer on the chat screen, sir.",
-        "The next part of the text is on the chat screen, sir.",
-        "Sir, please check the chat screen for more information.",
-        "There's more text on the chat screen for you, sir.",
-        "Sir, take a look at the chat screen for additional text.",
-        "You'll find more to read on the chat screen, sir.",
-        "Sir, check the chat screen for the rest of the text.",
-        "The chat screen has the rest of the text, sir.",
-        "There's more to see on the chat screen, sir, please look.",
-        "Sir, the chat screen holds the continuation of the text.",
-        "You'll find the complete answer on the chat screen, kindly check it out sir.",
-        "Please review the chat screen for the rest of the text, sir.",
-        "Sir, look at the chat screen for the complete answer."
-    ]
+def TextToSpeech(text: str, func: Callable = lambda *_: True):
+    parts = str(text).split(".")
+    if len(parts) > 4 and len(str(text)) >= 250:
+        text = " ".join(parts[:2]) + ". The rest of the answer is on the chat screen."
+    return TTS(text, func)
 
-    if len(Data) > 4 and len(Text) >= 250:
-        TTS(" ".join(Text.split(".")[0:2]) + "." + random.choice(responses), func)
-    else:
-        TTS(Text, func)
-# jar tumhala purna read karaich lavaich asel tr TTS cha use kara jar 4 or tya peksha line 
-# jast lines text asel tr TTS use kra ani Short made read karacih asel tr texttosppech use kara  
+
 if __name__ == "__main__":
     while True:
-        TextToSpeech(input("Enter the text : "))
+        TextToSpeech(input("Enter the text: "))

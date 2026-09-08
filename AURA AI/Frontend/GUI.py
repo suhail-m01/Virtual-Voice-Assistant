@@ -1,420 +1,234 @@
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QTextEdit, QStackedWidget, QWidget, QLineEdit, QGridLayout, QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QLabel, QSizePolicy)
-from PyQt5.QtGui import QIcon, QPainter, QMovie, QColor, QTextCharFormat, QFont, QPixmap, QTextBlockFormat
-from PyQt5.QtCore import Qt, QSize, QTimer
-from dotenv import dotenv_values
+"""AURA 2026 PyQt5 shell.
+
+The shell is intentionally a presentation layer: long-running agent, network,
+speech and tool work happens in a worker thread and communicates through Qt
+signals.  Legacy file-based status helpers remain available for the 2024 entry
+point and integrations.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from html import escape
 import sys
-import os
+from typing import Optional
 
-# Load environment variables
-env_vars = dotenv_values(".env")
-Assistantname = env_vars.get("Assistantname")
-old_chat_message = ""
-# Directory paths
-current_dir = os.getcwd()
-TempDirPath = rf"{current_dir}\Frontend\Files"
-GraphicsDirPath = rf"{current_dir}\Frontend\Graphics"
+from .theme import stylesheet
+from .visualizer import AuraState, AuraVisualizer
 
-def AnswerModifier(Answer):
-    lines = Answer.split('\n')
-    non_empty_lines = [line.strip() for line in lines if line.strip()]
-    modified_answer = '\n'.join(non_empty_lines)
-    return modified_answer
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+TempDirPath = PROJECT_DIR / "Frontend" / "Files"
+GraphicsDirPath = PROJECT_DIR / "Frontend" / "Graphics"
+TempDirPath.mkdir(parents=True, exist_ok=True)
 
 
-def QueryModifier(Query):
-    new_query = Query.lower().strip()
-    query_words  = new_query.split()
-    question_words = ['how','what','who','where','when','why','which','whom','can you',"what's", "where's","how's"]
-
-    if any(word + " " in new_query for word in question_words):
-        if query_words[-1][-1] in ['.','?','!']:
-            new_query = new_query[:-1] + "?"
-        else:
-            new_query += "?"
-    else:
-        if query_words[-1][-1] in ['.','?','!']:
-            new_query = new_query[:-1] + '.'
-        else:
-            new_query += '.'
-
-    return new_query.capitalize()
+def TempDirectoryPath(filename: str) -> str:
+    return str(TempDirPath / filename)
 
 
-def SetMicrophoneStatus(Command):
-    with open(TempDirectoryPath('Mic.data'), 'w', encoding='utf-8') as file:
-        file.write(Command)
-    
-
-def GetMicrophoneStatus():
-    
-    with open(TempDirectoryPath('Mic.data'), 'r', encoding='utf-8') as file:
-        Status = file.read().strip()
-    return Status
+def GraphicsDirectoryPath(filename: str) -> str:
+    return str(GraphicsDirPath / filename)
 
 
-def SetAsssistantStatus(Status):
-    with open(rf'{TempDirPath}\Status.data','w',encoding='utf-8') as file:
-        file.write(Status)
+def AnswerModifier(answer: str) -> str:
+    return "\n".join(line.strip() for line in str(answer).splitlines() if line.strip())
 
 
-def GetAssistantStatus():
-    with open(rf'{TempDirPath}\Status.data', 'r', encoding='utf-8') as file:
-        Status = file.read()
-    return Status
-    
+def QueryModifier(query: str) -> str:
+    clean = str(query).lower().strip()
+    if not clean:
+        return ""
+    question = clean.startswith(("how ", "what ", "who ", "where ", "when ", "why ", "which ", "can you "))
+    return clean.rstrip(".!?") + ("?" if question else ".")
 
-    
-# Define placeholders for the missing functions
-def MicButtonInitiated():
+
+def _write(name: str, value: str) -> None:
+    TempDirPath.mkdir(parents=True, exist_ok=True)
+    (TempDirPath / name).write_text(str(value), encoding="utf-8")
+
+
+def _read(name: str, default: str = "") -> str:
+    try:
+        return (TempDirPath / name).read_text(encoding="utf-8")
+    except OSError:
+        return default
+
+
+def SetMicrophoneStatus(command: str) -> None:
+    _write("Mic.data", command)
+
+
+def GetMicrophoneStatus() -> str:
+    return _read("Mic.data", "False").strip()
+
+
+def SetAsssistantStatus(status: str) -> None:
+    _write("Status.data", status)
+
+
+def GetAssistantStatus() -> str:
+    return _read("Status.data", "Available...")
+
+
+def ShowTextToScreen(text: str) -> None:
+    _write("Responses.data", text)
+
+
+def MicButtonInitiated() -> None:
     SetMicrophoneStatus("False")
 
-def MicButtonClosed():
+
+def MicButtonClosed() -> None:
     SetMicrophoneStatus("True")
 
-def GraphicsDirectoryPath(Filename):
-    path = rf'{GraphicsDirPath}\{Filename}'
-    return path
+
+try:
+    from PyQt5.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
+    from PyQt5.QtGui import QFont
+    from PyQt5.QtWidgets import (
+        QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+        QListWidgetItem, QMainWindow, QPushButton, QStackedWidget, QTextEdit,
+        QVBoxLayout, QWidget,
+    )
+    PYQT_AVAILABLE = True
+except ImportError:  # pragma: no cover - backend test environments may omit Qt
+    PYQT_AVAILABLE = False
 
 
-def TempDirectoryPath(Filename):
-    path = rf'{TempDirPath}\{Filename}'
-    return path
+if PYQT_AVAILABLE:
+    class AgentWorker(QObject):
+        finished = pyqtSignal(object)
+        progress = pyqtSignal(object)
 
-def ShowTextToScreen(Text):
-    with open (rf'{TempDirPath}\Responses.data','w', encoding='utf-8') as file:
-        file.write(Text)
+        def __init__(self, services, auth, text):
+            super().__init__()
+            self.services = services
+            self.auth = auth
+            self.text = text
 
-    
-class ChatSection(QWidget):
-    def __init__(self):
-        super(ChatSection, self).__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(-10, 40, 40, 100)
-        layout.setSpacing(-100)
-
-        self.chat_text_edit = QTextEdit()
-        self.chat_text_edit.setReadOnly(True)
-        self.chat_text_edit.setTextInteractionFlags(Qt.NoTextInteraction)
-        self.chat_text_edit.setFrameStyle(QFrame.NoFrame)
-        layout.addWidget(self.chat_text_edit)
-
-        self.setStyleSheet("background-color: black;")
-        layout.setSizeConstraint(QVBoxLayout.SetDefaultConstraint)
-        layout.setStretch(1, 1)
-        self.setSizePolicy(QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding))
-
-        text_color = QColor(Qt.blue)
-        text_color_text = QTextCharFormat()
-        text_color_text.setForeground(text_color)
-        self.chat_text_edit.setCurrentCharFormat(text_color_text)
-
-        self.gif_label = QLabel()
-        self.gif_label.setStyleSheet("border: none;")
-        movie = QMovie(rf"{GraphicsDirPath}\Jarvis.gif")
-        max_gif_size_W = 500
-        max_gif_size_H = 400
-        movie.setScaledSize(QSize(max_gif_size_W, max_gif_size_H))
-        self.gif_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
-        self.gif_label.setMovie(movie)
-        movie.start()
-        layout.addWidget(self.gif_label)
-
-        self.label = QLabel("")
-        self.label.setStyleSheet("color: white; font-size: 16px; margin-right: 195px; border: none; margin-top: -30px;")
-        self.label.setAlignment(Qt.AlignRight)
-        layout.addWidget(self.label)
-
-        font = QFont()
-        font.setPointSize(13)
-        self.chat_text_edit.setFont(font)
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.loadMessages)
-        self.timer.timeout.connect(self.SpeechRecogText)
-        self.timer.start(5)
-
-        self.chat_text_edit.viewport().installEventFilter(self)
-        self.setStyleSheet("""
-            QScrollBar:vertical {
-                border: none;
-                background: black;
-                width: 10px;
-                margin: 0px 0px 0px 0px;
-            }
-
-            QScrollBar::handle:vertical {
-                background: white;
-                min-height: 20px;
-            }
-
-            QScrollBar::add-line:vertical {
-                background: black;
-                subcontrol-position: bottom;
-                subcontrol-origin: margin;
-                height: 10px;
-            }
-
-            QScrollBar::sub-line:vertical {
-                background: black;
-                subcontrol-position: top;
-                subcontrol-origin: margin;
-                height: 10px;
-            }
-
-            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
-                border: none;
-                background: none;
-                color: none;
-            }
-
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: none;
-            }
-
-        """)
-
-    def loadMessages(self):
-        global old_chat_message
-        try:
-            with open(rf'{TempDirPath}\Responses.data', 'r', encoding='utf-8') as file:
-                messages = file.read()
-            if messages and messages != old_chat_message:
-                self.addMessage(message=messages, color='White')
-                old_chat_message = messages
-        except FileNotFoundError:
-            pass
-
-    def SpeechRecogText(self):
-        try:
-            with open(rf'{TempDirPath}\Status.data', 'r', encoding='utf-8') as file:
-                messages = file.read()
-            self.label.setText(messages)
-        except FileNotFoundError:
-            pass
-
-    def load_icon(self, path, width=60, height=60):
-        pixmap = QPixmap(path)
-        new_pixmap = pixmap.scaled(width, height)
-        self.icon_label.setPixmap(new_pixmap)
-
-    def toggle_icon(self, event=None):
-        if self.toggled:
-            self.load_icon(rf'{GraphicsDirPath}\voice.png', 60, 60)
-            MicButtonInitiated()
-        else:
-            self.load_icon(rf'{GraphicsDirPath}\mic.png', 60, 60)
-            MicButtonClosed()
-        self.toggled = not self.toggled
-
-    def addMessage(self, message, color):
-        cursor = self.chat_text_edit.textCursor()
-        format = QTextCharFormat()
-        formatm = QTextBlockFormat()
-        formatm.setTopMargin(10)
-        formatm.setLeftMargin(10)
-        format.setForeground(QColor(color))
-        cursor.setCharFormat(format)
-        cursor.setBlockFormat(formatm)
-        cursor.insertText(message + "\n")
-        self.chat_text_edit.setTextCursor(cursor)
+        @pyqtSlot()
+        def run(self):
+            response = self.services.agent.handle(self.text, auth=self.auth, on_event=self.progress.emit)
+            self.finished.emit(response)
 
 
+    class MainWindow(QMainWindow):
+        def __init__(self, services=None):
+            super().__init__()
+            self.services = services
+            self._thread: Optional[QThread] = None
+            self._worker: Optional[AgentWorker] = None
+            self._history: list[str] = []
+            self.setObjectName("root")
+            self.setWindowTitle("AURA 2026")
+            self.resize(1280, 820)
+            self.setStyleSheet(stylesheet())
+            self._build_shell()
+            self._show_page(1)
 
-class InitialScreen(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        desktop = QApplication.desktop()
-        screen_width = desktop.screenGeometry().width()
-        screen_height = desktop.screenGeometry().height()
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        def _build_shell(self):
+            root = QWidget(); root.setObjectName("root")
+            shell = QHBoxLayout(root); shell.setContentsMargins(22, 22, 22, 22); shell.setSpacing(18)
+            sidebar = QFrame(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(196)
+            side = QVBoxLayout(sidebar); side.setContentsMargins(16, 20, 16, 16); side.setSpacing(6)
+            brand = QLabel("AURA <span style='color:#7B83FF'>2026</span>"); brand.setTextFormat(Qt.RichText); brand.setObjectName("title")
+            side.addWidget(brand); tag = QLabel("SECURE AI ASSISTANT"); tag.setObjectName("eyebrow"); side.addWidget(tag); side.addSpacing(20)
+            self.nav = []
+            for index, label in enumerate(("Home", "Assistant", "Activity", "Payments", "Security", "Settings", "Profile")):
+                button = QPushButton(label); button.setObjectName("nav"); button.setProperty("selected", "false"); button.clicked.connect(lambda checked=False, i=index: self._show_page(i)); side.addWidget(button); self.nav.append(button)
+            side.addStretch(); status = QLabel("●  Protected session\n\nLocal controls remain on your device"); status.setObjectName("muted"); side.addWidget(status)
+            shell.addWidget(sidebar)
+            self.pages = QStackedWidget(); shell.addWidget(self.pages, 1)
+            self._add_home(); self._add_assistant(); self._add_activity(); self._add_payments(); self._add_security(); self._add_settings(); self._add_profile()
+            self.setCentralWidget(root)
 
-        gif_label = QLabel()
-        movie = QMovie(GraphicsDirPath + r'\Jarvis.gif')  # Fixed this line
-        gif_label.setMovie(movie)
-        max_gif_size_H = int(screen_width / 4 * 1.5)
-        movie.setScaledSize(QSize(screen_width//2, max_gif_size_H))
-        gif_label.setAlignment(Qt.AlignCenter)
-        movie.start()
+        def _card(self, title: str, subtitle: str = ""):
+            card = QFrame(); card.setObjectName("card"); layout = QVBoxLayout(card); layout.setContentsMargins(20, 18, 20, 18); layout.setSpacing(8)
+            label = QLabel(title); label.setObjectName("title"); layout.addWidget(label)
+            if subtitle:
+                sub = QLabel(subtitle); sub.setObjectName("subtitle"); sub.setWordWrap(True); layout.addWidget(sub)
+            return card, layout
 
-        gif_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.icon_label = QLabel()
-        pixmap = QPixmap(GraphicsDirPath + r'\Mic_on.png')  # Fixed this line
-        new_pixmap = pixmap.scaled(60, 60)
-        self.icon_label.setPixmap(new_pixmap)
-        self.icon_label.setFixedSize(150, 150)
-        self.icon_label.setAlignment(Qt.AlignCenter)
-        self.toggled = True
-        self.toggle_icon()
-        self.icon_label.mousePressEvent = self.toggle_icon
+        def _page_heading(self, eyebrow: str, title: str, subtitle: str):
+            wrapper = QWidget(); layout = QVBoxLayout(wrapper); layout.setContentsMargins(20, 12, 20, 12); layout.setSpacing(6)
+            e = QLabel(eyebrow.upper()); e.setObjectName("eyebrow"); layout.addWidget(e); t = QLabel(title); t.setObjectName("title"); layout.addWidget(t); s = QLabel(subtitle); s.setObjectName("subtitle"); layout.addWidget(s); layout.addSpacing(18)
+            return wrapper, layout
 
-        self.label = QLabel("")
-        self.label.setStyleSheet("color: white; font-size: 16px; margin-bottom: 0;")
-        content_layout.addWidget(gif_label, alignment=Qt.AlignCenter)
-        content_layout.addWidget(self.label, alignment=Qt.AlignCenter)
-        content_layout.addWidget(self.icon_label, alignment=Qt.AlignCenter)
-        content_layout.setContentsMargins(0, 0, 0, 150)
-        self.setLayout(content_layout)
+        def _add_home(self):
+            page, layout = self._page_heading("AURA / HOME", "Good to see you.", "A calm command center for the work that matters.")
+            row = QHBoxLayout();
+            for title, value, detail in (("Aura status", "Ready", "Listening is off"), ("Privacy mode", "Balanced", "Local controls preferred"), ("Payment lock", "LOCKED", "Fresh approval required")):
+                card, cl = self._card(title); value_label = QLabel(value); value_label.setObjectName("title"); cl.addWidget(value_label); detail_label = QLabel(detail); detail_label.setObjectName("subtitle"); cl.addWidget(detail_label); row.addWidget(card)
+            layout.addLayout(row); layout.addStretch(); self.pages.addWidget(page)
 
-        self.setLayout(content_layout)
-        self.setFixedHeight(screen_height)
-        self.setFixedWidth(screen_width)
-        self.setStyleSheet("background-color: black;")
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.SpeechRecogText)
-        self.timer.start(5)
+        def _add_assistant(self):
+            page, layout = self._page_heading("AURA / ASSISTANT", "What can I take care of?", "Voice-first, text-ready, and explicit when an action needs your approval.")
+            card, cl = self._card("Assistant")
+            self.visualizer = AuraVisualizer(); cl.addWidget(self.visualizer, alignment=Qt.AlignCenter)
+            self.chat = QTextEdit(); self.chat.setReadOnly(True); self.chat.setMinimumHeight(160); cl.addWidget(self.chat)
+            composer = QHBoxLayout(); self.input = QLineEdit(); self.input.setPlaceholderText("Ask Aura to search, create, open, or explain…"); self.input.returnPressed.connect(self._submit); composer.addWidget(self.input, 1)
+            send = QPushButton("Send"); send.setObjectName("primary"); send.clicked.connect(self._submit); composer.addWidget(send)
+            voice = QPushButton("Voice"); voice.clicked.connect(self._listen); composer.addWidget(voice)
+            stop = QPushButton("Stop"); stop.setObjectName("danger"); stop.clicked.connect(self._stop); composer.addWidget(stop); cl.addLayout(composer)
+            self.progress_label = QLabel("Ready"); self.progress_label.setObjectName("subtitle"); cl.addWidget(self.progress_label)
+            self.approval_bar = QWidget(); approval_layout = QHBoxLayout(self.approval_bar); approval_layout.setContentsMargins(0, 8, 0, 0)
+            self.approval_text = QLabel("Approval required for the exact action above."); self.approval_text.setObjectName("subtitle"); approval_layout.addWidget(self.approval_text, 1)
+            approve = QPushButton("Approve"); approve.setObjectName("primary"); approve.clicked.connect(lambda: self._approval_response("yes")); approval_layout.addWidget(approve)
+            cancel = QPushButton("Cancel"); cancel.setObjectName("danger"); cancel.clicked.connect(lambda: self._approval_response("cancel")); approval_layout.addWidget(cancel)
+            self.approval_bar.hide(); cl.addWidget(self.approval_bar)
+            layout.addWidget(card); self.pages.addWidget(page)
 
-    def SpeechRecogText(self):
-        with open(TempDirPath + r'\Status.data', 'r', encoding='utf-8') as file:  # Fixed this line
-            messages = file.read()
-            self.label.setText(messages)
+        def _simple_page(self, eyebrow, title, subtitle, body):
+            page, layout = self._page_heading(eyebrow, title, subtitle); card, cl = self._card(body); label = QLabel("This surface is connected to the same security and persistence services as Assistant."); label.setWordWrap(True); label.setObjectName("subtitle"); cl.addWidget(label); layout.addWidget(card); layout.addStretch(); self.pages.addWidget(page)
 
-    def load_icon(self, path, width=60, height=60):
-        pixmap = QPixmap(path)
-        new_pixmap = pixmap.scaled(width, height)
-        self.icon_label.setPixmap(new_pixmap)
+        def _add_activity(self): self._simple_page("AURA / ACTIVITY", "Activity", "A user-understandable timeline of Aura actions.", "Recent activity")
+        def _add_payments(self): self._simple_page("AURA / PAYMENTS", "Payments", "Razorpay operations stay locked until you deliberately approve them.", "PAYMENTS LOCKED  ·  TEST MODE")
+        def _add_security(self): self._simple_page("AURA / SECURITY", "Security", "Authentication, consent, audit integrity, and confidential-computing status.", "Tamper-Evident Audit Ledger  ·  Verify integrity")
+        def _add_settings(self): self._simple_page("AURA / SETTINGS", "Settings", "Voice, model, privacy, memory, automation, and security preferences.", "Preferences")
+        def _add_profile(self): self._simple_page("AURA / PROFILE", "Profile", "Manage your account and active sessions.", "Signed-in profile")
 
-    def toggle_icon(self, event=None):
-        if self.toggled:
-            self.load_icon(GraphicsDirPath + r'\Mic_on.png', 60, 60)  # Fixed this line
-            MicButtonInitiated()  # Ensure this function is defined
-        else:
-            self.load_icon(GraphicsDirPath + r'\Mic_off.png', 60, 60)  # Fixed this line
-            MicButtonClosed()  # Ensure this function is defined
-        self.toggled = not self.toggled
+        def _show_page(self, index: int):
+            if hasattr(self, "pages") and index < self.pages.count(): self.pages.setCurrentIndex(index)
+            if hasattr(self, "nav"):
+                for i, button in enumerate(self.nav): button.setProperty("selected", "true" if i == index else "false"); button.style().unpolish(button); button.style().polish(button)
 
+        def _submit(self):
+            text = self.input.text().strip()
+            if not text or self._thread and self._thread.isRunning(): return
+            self.input.clear(); self.chat.append(f"<b>You</b>  {escape(text)}"); self.visualizer.set_state(AuraState.UNDERSTANDING); self.progress_label.setText("Understanding request…")
+            if self.services is None:
+                try:
+                    from Backend.application import create_application
+                    self.services = create_application()
+                except Exception:
+                    self.chat.append("<b>Aura</b>  The backend is not configured yet."); self.visualizer.set_state(AuraState.WARNING); return
+            auth = self.services.local_context()
+            self._thread = QThread(); self._worker = AgentWorker(self.services, auth, text); self._worker.moveToThread(self._thread); self._thread.started.connect(self._worker.run); self._worker.progress.connect(self._on_progress); self._worker.finished.connect(self._on_result); self._worker.finished.connect(self._thread.quit); self._thread.finished.connect(self._thread.deleteLater); self._thread.start()
 
-class MessageScreen(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        desktop = QApplication.desktop()
-        screen_width = desktop.screenGeometry().width()
-        screen_height = desktop.screenGeometry().height()
-        layout = QVBoxLayout()
-        label = QLabel("")
-        layout.addWidget(label)
-        chat_section = ChatSection()  # Ensure ChatSection is defined elsewhere
-        layout.addWidget(chat_section)
-        self.setLayout(layout)
-        self.setStyleSheet("background-color: black;")
-        self.setFixedHeight(screen_height)
-        self.setFixedWidth(screen_width)
+        def _listen(self):
+            SetMicrophoneStatus("True")
+            self.visualizer.set_state(AuraState.LISTENING)
+            self.progress_label.setText("Listening…")
 
+        def _approval_response(self, value: str):
+            self.input.setText(value)
+            self._submit()
 
-class CustomTopBar(QWidget):
-    def __init__(self, parent, stacked_widget):
-        super().__init__(parent)
-        self.stacked_widget = stacked_widget
-        self.current_screen = None
-        self.initUI()
+        def _on_progress(self, event):
+            self.progress_label.setText(event.message or event.status or event.kind); mapping = {"approval_required": AuraState.AWAITING_APPROVAL, "tool_start": AuraState.EXECUTING, "tool_complete": AuraState.SUCCESS, "tool_failure": AuraState.ERROR}; self.visualizer.set_state(mapping.get(event.kind, AuraState.THINKING))
 
-    def initUI(self):
-        self.setFixedHeight(50)
-        layout = QHBoxLayout(self)
-        layout.setAlignment(Qt.AlignRight)
+        def _on_result(self, response):
+            self.chat.append(f"<b>Aura</b>  {escape(response.message)}"); self.progress_label.setText(response.message); self.approval_text.setText(response.message); self.approval_bar.setVisible(response.awaiting_approval); self.visualizer.set_state(AuraState.AWAITING_APPROVAL if response.awaiting_approval else AuraState.SUCCESS if response.status.value == "COMPLETE" else AuraState.ERROR); self._worker = None; self._thread = None
 
-        home_button = QPushButton()
-        home_icon = QIcon(GraphicsDirPath + r'\Home.png')
-        home_button.setIcon(home_icon)
-        home_button.setText("   Home")
-        home_button.setStyleSheet("height:40px; line-height:40px; background-color:white; color: black")
-        home_button.clicked.connect(self.showInitialScreen)
-
-        message_button = QPushButton()
-        message_icon = QIcon(GraphicsDirPath + r'\Message.png')
-        message_button.setIcon(message_icon)
-        message_button.setText("   Message")
-        message_button.setStyleSheet("height:40px; line-height:40px; background-color:white; color: black")
-        message_button.clicked.connect(self.showMessageScreen)
-
-        minimize_button = QPushButton()
-        minimize_icon = QIcon(GraphicsDirPath + r'\Minimize.png')
-        minimize_button.setIcon(minimize_icon)
-        minimize_button.setFlat(True)
-        minimize_button.setStyleSheet("background-color:white")
-        minimize_button.clicked.connect(self.minimizeWindow)
-
-        self.maximize_button = QPushButton()
-        self.maximize_icon = QIcon(GraphicsDirPath + r'\Maximize.png')
-        self.restore_icon = QIcon(GraphicsDirPath + r'\Restore.png')
-        self.maximize_button.setIcon(self.maximize_icon)
-        self.maximize_button.setFlat(True)
-        self.maximize_button.setStyleSheet("background-color:white")
-        self.maximize_button.clicked.connect(self.maximizeWindow)
-
-        close_button = QPushButton()
-        close_icon = QIcon(GraphicsDirPath + r'\Close.png')
-        close_button.setIcon(close_icon)
-        close_button.setStyleSheet("background-color:white")
-        close_button.clicked.connect(self.closeWindow)
-
-        layout.addWidget(home_button)
-        layout.addWidget(message_button)
-        layout.addWidget(minimize_button)
-        layout.addWidget(self.maximize_button)
-        layout.addWidget(close_button)
-
-        self.draggable = True
-        self.offset = None
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), Qt.white)
-        super().paintEvent(event)
+        def _stop(self):
+            if self.services: self.services.agent.stop(self.services.local_context().user_id); self.progress_label.setText("Stop requested."); self.visualizer.set_state(AuraState.WARNING)
 
 
+    def GraphicalUserInterface(services=None):
+        app = QApplication.instance() or QApplication(sys.argv)
+        window = MainWindow(services); window.show(); return app.exec_()
+else:
+    class MainWindow:  # pragma: no cover
+        def __init__(self, *args, **kwargs): raise RuntimeError("PyQt5 is not installed")
 
-    def minimizeWindow(self):
-        self.parent().showMinimized()
-
-    def maximizeWindow(self):
-        if self.parent().isMaximized():
-            self.parent().showNormal()
-            self.maximize_button.setIcon(self.maximize_icon)
-        else:
-            self.parent().showMaximized()
-            self.maximize_button.setIcon(self.restore_icon)
-
-    def closeWindow(self):
-        self.parent().close()
-
-    def showMessageScreen(self):
-        self.stacked_widget.setCurrentIndex(1)
-
-    def showInitialScreen(self):
-        self.stacked_widget.setCurrentIndex(0)
-
-
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super(MainWindow, self).__init__()
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.initUI()
-
-    def initUI(self):
-        desktop = QApplication.desktop()
-        screen_width = desktop.screenGeometry().width()
-        screen_height = desktop.screenGeometry().height()
-        stacked_widget = QStackedWidget(self)
-        initial_screen = InitialScreen()
-        message_screen = MessageScreen()
-        stacked_widget.addWidget(initial_screen)
-        stacked_widget.addWidget(message_screen)
-        self.setGeometry(0, 0, screen_width, screen_height)
-        self.setStyleSheet("background-color: black;")
-        top_bar = CustomTopBar(self, stacked_widget)
-        self.setMenuWidget(top_bar)
-        self.setCentralWidget(stacked_widget)
-
-def GraphicalUserInterface():
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
-# Run the application
-if __name__ == "__main__":
-    import sys
-    app = QApplication(sys.argv)
-    main_window = MainWindow()
-    main_window.show()
-    sys.exit(app.exec_())
+    def GraphicalUserInterface(services=None):  # pragma: no cover
+        raise RuntimeError("PyQt5 is not installed; install Requirements.txt to launch the desktop shell")

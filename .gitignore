@@ -1,0 +1,35 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+
+# Runtime state and sensitive local persistence
+**/Runtime/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+**/secrets/
+
+# Python/build/editor artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+
+# Generated media and temporary IPC files (tracked legacy assets are unaffected)
+*.tmp
+*.part
